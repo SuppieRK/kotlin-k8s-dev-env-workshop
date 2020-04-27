@@ -22,7 +22,11 @@ spec:
     {{- end }}
       containers:
         - name: {{ .Chart.Name }}
+          {{- if contains ":" .Values.image.repository }}
+          image: {{ .Values.image.repository | quote }}
+          {{- else }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - name: http

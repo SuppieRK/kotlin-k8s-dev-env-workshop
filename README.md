@@ -1,130 +1,89 @@
 ## Workshop: Through hardships to the cloud
 
-### Creating Kubernetes cluster
+### Set up Skaffold
 
-Kubernetes Engine lets you create Kubernetes clusters to host your application. These are clusters of VMs in the cloud, managed by a Kubernetes server.
+- Update version in `build.gradle.kts` to `1.0.2`
 
-- Choose a cluster name. For the rest of these instructions, I'll assume that name is `demo-cluster`.
+- Create `skaffold.yaml` at project root directory with following content (you have to replace `PROJECT_ID` with your actual project ID in file)
 
-- Create the cluster.
+```yaml
+apiVersion: skaffold/v2alpha4
+kind: Config
+build:
+  artifacts:
+    - image: gcr.io/PROJECT_ID/demo
+      jib: {}
+deploy:
+  helm:
+    releases:
+      - name: demo
+        chartPath: demo
+        values:
+          image.repository: gcr.io/PROJECT_ID/demo
+``` 
+
+- Modify value of `image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"` in `demo/templates/deployment.yaml` in a following way
+
+```yaml
+          {{- if contains ":" .Values.image.repository }}
+          image: {{ .Values.image.repository | quote }}
+          {{- else }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          {{- end }}
+```
+
+**Note**: indentation is important! Keep everything indented at the same level as initial `image` key. 
+
+## Finally - fun time!
+
+What we actually have now is a fully setup environment that can launch your service with live reload ability in the cloud so that you can open even more Google Chrome tabs simultaneously :)
+
+Kick off everything by executing in terminal
 
 ```shell script
-gcloud container clusters create demo-cluster --num-nodes=2
+skaffold dev --port-forward
 ```
 
-This command creates a cluster of two machines. You can choose a different size, but two is a good starting point.
+and test your deployment as usual by accessing [http://localhost:8080/hello](http://localhost:8080/hello) and [http://localhost:8080/hello?subject=Kotlin](http://localhost:8080/hello?subject=Kotlin)
 
-It might take several minutes for the cluster to be created. You can check the [Cloud Console](http://cloud.google.com/console), under the Kubernetes Engine section, to see that your cluster is running. You will also be able to see the individual running VMs under the Compute Engine section. Note that once the cluster is running, you will be charged for the VM usage.
+After which try to add your own endpoint, hit `Ctrl+S` or `Command+S` and see how image gets rebuilt and redeployed to your Google Kubernetes Engine cluster.
 
-- Configure the gcloud command-line tool to use your cluster by default, so you don't have to specify it every time for the remaining gcloud commands.
+### Clean up
 
+After you've finished this tutorial, clean up the resources you created on Google Cloud Platform so you won't be billed for them going forward. To clean, either delete your Kubernetes Engine resources, or delete the entire project.
+
+#### Deleting Kubernetes Engine resources
+
+To delete your app from Kubernetes Engine, you must remove both the load balancer and the Kubernetes Engine cluster.
+
+- If you followed the tutorial precisely - you should have no deployments. Skaffold automatically calls `helm delete --purge` for your deployment when you hit `Ctrl+C`
+
+- Delete the cluster, which deletes the resources used by the cluster, including virtual machines, disks, and network resources:
 ```shell script
-gcloud config set container/cluster demo-cluster
+gcloud container clusters delete demo-cluster
 ```
 
-Replace the name if you named your cluster differently.
-
-### Preparing Helm
-
-Helm helps you manage Kubernetes applications - Helm Charts help you define, install and upgrade event the most complex Kubernetes applications.
-
-- Install Tiller - Helm server-side component
-
+- Delete your Docker image
 ```shell script
-kubectl create serviceaccount -n kube-system tiller
-kubectl create clusterrolebinding tiller-cluster-rule --clusterrole=cluster-admin --serviceaccount=kube-system:tiller
+gcloud container images delete gcr.io/${PROJECT_ID}/demo --force-delete-tags
 ```
 
-- Initialize Helm
+### Deleting the project
 
+Alternately, you can delete the project in its entirety. To do so using the gcloud tool, run:
 ```shell script
-helm init --service-account tiller
+gcloud projects delete ${PROJECT_ID}
 ```
+where `${PROJECT_ID}` is your Google Cloud Platform project ID.
 
-### Creating Helm Chart for application
+**Warning**: Deleting a project has the following consequences:
 
-- Initialize Helm chart by executing
+If you used an existing project, you'll also delete any other work you've done in the project. You can't reuse the project ID of a deleted project. If you created a custom project ID that you plan to use in the future, you should delete the resources inside the project instead. This ensures that URLs that use the project ID, such as an appspot.com URL, remain available.
 
-```shell script
-helm create demo
-```
+### Next steps
 
-#### Modify Helm Chart
+If you want to procure a static IP address and connect your domain name, you might find [this tutorial](https://cloud.google.com/kubernetes-engine/docs/tutorials/configuring-domain-name-static-ip) helpful.
 
-- `deployment.yaml`
-    - Change value of `spec.template.spec.containers.ports.containerPort` from `80` to `{{ .Values.service.port }}`
-    - Remove `spec.template.spec.containers.livenessProbe`
-    - Remove `spec.template.spec.containers.readinessProbe`
-- `service.yaml`
-    - Change value of `spec.ports.targetPort` from `http` to `{{ .Values.service.port }}`
-- `values.yaml`
-    - Change value of `image.tag` from `stable` to `latest`
-    - Change value of `image.pullPolicy` from `IfNotPresent` to `Always`
-    - Change value of `service.type` from `ClusterIP` to `NodePort`
-    - Change value of `service.port` from `80` to `8080`
-    
-#### Test Helm Chart
+See the [Kubernetes Engine documentation](https://cloud.google.com/kubernetes-engine/docs/) for more information on managing Kubernetes Engine clusters.
 
-- Helm provides you linter to use
-
-```shell script
-helm lint ./demo
-```
-
-- Helm also allows you to render the template locally
-
-```shell script
-helm template ./demo
-```
-
-- Helm is also able to do a dry run and test connection to Kubernetes cluster
-
-```shell script
-helm install --name demo --dry-run --debug ./demo
-```
-
-### Build Docker image and deploy it to Kubernetes cluster using Helm chart
-
-- Update version in `build.gradle.kts` to `1.0.1`
-
-- Build image using JIB, which will automatically push image to Google Container Registry
-
-```shell script
-./gradlew jib --image=gcr.io/${PROJECT_ID}/demo
-```
-
-- Deploy image to Kubernetes cluster via Helm chart
-
-```shell script
-helm install --name demo ./demo --set image.repository=gcr.io/${PROJECT_ID}/demo
-```
-
-- We haven't used any load balancer to expose our service to public web, so to test it we need to do port forwarding (**Note**: Ctrl+C after executing this command will stop port forwarding)
-
-```shell script
-kubectl port-forward $(kubectl get pod --selector="app.kubernetes.io/instance=demo,app.kubernetes.io/name=demo" --output jsonpath='{.items[0].metadata.name}') 8080:8080
-```
-
-- Open the browser and make sure your get a valid response when accessing [http://localhost:8080/hello](http://localhost:8080/hello). The result should be:
-
-```
-Hello, World!
-```
-
-- Open the browser and make sure your get a valid response when accessing [http://localhost:8080/hello?subject=Kotlin](http://localhost:8080/hello?subject=Kotlin). The result should be:
-
-```
-Hello, Kotlin!
-```
-
-### Clean up Helm deployment for further steps
-
-To completely delete Helm deployment, use
-
-```shell script
-helm del --purge demo
-```
-
-### Next step
-
-Switch to `03-skaffold` branch
+See the [Kubernetes documentation](https://kubernetes.io/docs/home/) for more information on managing your application deployment using Kubernetes.

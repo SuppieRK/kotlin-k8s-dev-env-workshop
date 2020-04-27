@@ -1,0 +1,13 @@
+apiVersion: skaffold/v2alpha4
+kind: Config
+build:
+  artifacts:
+    - image: gcr.io/PROJECT_ID/demo
+      jib: {}
+deploy:
+  helm:
+    releases:
+      - name: demo
+        chartPath: demo
+        values:
+          image.repository: gcr.io/PROJECT_ID/demo
